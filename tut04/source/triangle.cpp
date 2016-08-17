@@ -142,7 +142,6 @@ void render(SDL_Window *window)
 	// Pass all of the triangle information into the GLSL program.
 	glEnableVertexAttribArray(attribute_coord3d);
 	glEnableVertexAttribArray(attribute_v_color);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo_triangle);
 	glVertexAttribPointer(attribute_coord3d, // attribute
 				3, // number of elements for the input.
 				GL_FLOAT, // type of each element.
