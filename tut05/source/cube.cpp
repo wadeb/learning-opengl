@@ -18,25 +18,21 @@ using std::endl;
 namespace {
 
 // Constants.
-const char * const TRIANGLE_VERTEX_SHADER = "glsl/triangle.v.glsl";
-const char * const TRIANGLE_FRAGMENT_SHADER = "glsl/triangle.f.glsl";
+const char * const CUBE_VERTEX_SHADER = "glsl/cube.v.glsl";
+const char * const CUBE_FRAGMENT_SHADER = "glsl/cube.f.glsl";
 
 // GLSL program handle
 GLuint program;
-// Triangle VBO handles.
-GLuint vbo_triangle;
+// Cube vertices buffer handles.
+GLuint vbo_cube_vertices, vbo_cube_colors;
 // Input variables for the vertex shader.
 GLint attribute_coord3d, attribute_v_color;
-// Global uniform variable.
-GLint uniform_fade;
-// Global unform transformation handle.
-GLint uniform_m_transform;
-
-// Attributes struct.
-struct attributes {
-	GLfloat coord3d[3];
-	GLfloat v_color[3];
-};
+// IBO handle.
+GLuint ibo_cube_elements;
+// Uniform used to pass MVP matrix.
+GLint uniform_mvp;
+// Define the aspect ratio.
+int screen_width = 800, screen_height = 600;
 
 //
 // Initiate resources.
@@ -49,25 +45,78 @@ struct attributes {
 //
 bool init_resources()
 {
-	// Pass both of the attributes in a single array.
-	struct attributes triangle_attributes[] = {
-		{{ 0.0, 0.8, 0.0 }, { 1.0, 1.0, 0.0 }},
-		{{ -0.8, -0.8, 0.0 }, { 0.0, 0.0, 1.0 }},
-		{{ 0.8, -0.8, 0.0 }, { 1.0, 0.0, 0.0 }}
+	GLfloat cube_vertices[] = {
+		// front of the cube.
+		-1.0, -1.0, 1.0,
+		1.0, -1.0, 1.0,
+		1.0, 1.0, 1.0,
+		-1.0, 1.0, 1.0,
+		// back of the cube.
+		-1.0, -1.0, -1.0,
+		1.0, -1.0, -1.0,
+		1.0, 1.0, -1.0,
+		-1.0, 1.0, -1.0
+	};
+	glGenBuffers(1, &vbo_cube_vertices);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo_cube_vertices);
+	glBufferData(GL_ARRAY_BUFFER,
+			sizeof(cube_vertices),
+			cube_vertices,
+			GL_STATIC_DRAW);
+
+	GLfloat cube_colors[] = {
+		// front colors of the cube.
+		1.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		0.0, 0.0, 1.0,
+		1.0, 1.0, 1.0,
+		// back colors of the cube.
+		1.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		0.0, 0.0, 1.0,
+		1.0, 1.0, 1.0
+	};
+	glGenBuffers(1, &vbo_cube_colors);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo_cube_colors);
+	glBufferData(GL_ARRAY_BUFFER,
+			sizeof(cube_colors),
+			cube_colors,
+			GL_STATIC_DRAW);
+
+	// Specify the triangles using the index of the vertices in the array.
+	GLushort cube_elements[] = {
+		// front
+		0, 1, 2,
+		2, 3, 0,
+		// top
+		1, 5, 6,
+		6, 2, 1,
+		// back
+		7, 6, 5,
+		5, 4, 7,
+		// bottom,
+		4, 0, 3,
+		3, 7, 4,
+		// left
+		4, 5, 1,
+		1, 0, 4,
+		// right
+		3, 2, 6,
+		6, 7, 3
 	};
 
-	glGenBuffers(1, &vbo_triangle);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo_triangle);
-	glBufferData(GL_ARRAY_BUFFER,
-			sizeof(triangle_attributes),
-			triangle_attributes,
+	glGenBuffers(1, &ibo_cube_elements);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_cube_elements);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+			sizeof(cube_elements),
+			cube_elements,
 			GL_STATIC_DRAW);
 
 	GLuint vs, fs;
-	if ((vs = create_shader(TRIANGLE_VERTEX_SHADER, GL_VERTEX_SHADER)) == 0)
+	if ((vs = create_shader(CUBE_VERTEX_SHADER, GL_VERTEX_SHADER)) == 0)
 		return false;
 
-	if ((fs = create_shader(TRIANGLE_FRAGMENT_SHADER,
+	if ((fs = create_shader(CUBE_FRAGMENT_SHADER,
 				GL_FRAGMENT_SHADER)) == 0) {
 
 		return false;
@@ -103,19 +152,9 @@ bool init_resources()
 		return false;
 	}
 
-	// Bind the uniform variable for the GLSL program.
-	const char *uniform_name;
-	uniform_name = "fade";
-	uniform_fade = glGetUniformLocation(program, uniform_name);
-	if (uniform_fade == -1) {
-		cerr << "Could not bind uniform_fade " << uniform_name << endl;
-		return false;
-	}
-
-	// Bind the uniform matrix transormation handle for the GLSL program.
-	uniform_name = "m_transform";
-	uniform_m_transform = glGetUniformLocation(program, uniform_name);
-	if (uniform_m_transform == -1) {
+	const char *uniform_name = "mvp";
+	uniform_mvp = glGetUniformLocation(program, uniform_name);
+	if (uniform_mvp == -1) {
 		cerr << "Could not bind uniform " << uniform_name << endl;
 		return false;
 	}
@@ -128,38 +167,41 @@ bool init_resources()
 //
 void render(SDL_Window *window)
 {
-	// Enable Alpha
-	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
 	// Make the background white to start.
 	glClearColor(1.0, 1.0, 1.0, 1.0);
-	glClear(GL_COLOR_BUFFER_BIT);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	// Tell it to use the GLSL program that we made.
 	glUseProgram(program);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo_triangle);
+
 	// Pass all of the triangle information into the GLSL program.
 	glEnableVertexAttribArray(attribute_coord3d);
-	glEnableVertexAttribArray(attribute_v_color);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo_cube_vertices);
 	glVertexAttribPointer(attribute_coord3d, // attribute
 				3, // number of elements for the input.
 				GL_FLOAT, // type of each element.
 				GL_FALSE, // take the values as-is.
-				sizeof(struct attributes), // stride.
-				(GLvoid *)offsetof(struct attributes,
-							coord3d));
+				0, // stride.
+				0); // offset of the first element.
 
+	glEnableVertexAttribArray(attribute_v_color);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo_cube_colors);
 	glVertexAttribPointer(attribute_v_color, // attribute
 				3, // number of elements for the input.
 				GL_FLOAT,
 				GL_FALSE,
-				sizeof(struct attributes),
-				(GLvoid *)offsetof(struct attributes,
-							v_color)); // offset.
+				0,
+				0); // offset.
 
-	// Push each element in triangle_vertics into the vertex shader.
-	glDrawArrays(GL_TRIANGLES, 0, 3);
+	// Give denoting which vertices make the triangles that are to be drawn.
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_cube_elements);
+	int size;
+	glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &size);
+	glDrawElements(GL_TRIANGLES,
+			size/sizeof(GLushort),
+			GL_UNSIGNED_SHORT,
+			0);
+
 	glDisableVertexAttribArray(attribute_coord3d);
 	glDisableVertexAttribArray(attribute_v_color);
 
@@ -173,36 +215,53 @@ void render(SDL_Window *window)
 void free_resources()
 {
 	glDeleteProgram(program);
-	glDeleteBuffers(1, &vbo_triangle);
+	glDeleteBuffers(1, &vbo_cube_vertices);
+	glDeleteBuffers(1, &vbo_cube_colors);
+	glDeleteBuffers(1, &ibo_cube_elements);
 }
 
 //
-// Have the uniform fade oscillate between 0 and 1 every 5 seconds.
+// Have the triangle rotate and translate in oscillation.
 //
 void input_logic()
 {
-	// Logic for rotation and translation.
-	// -1 <--> +1 every 5 seconds.
-	float move = sinf(SDL_GetTicks() / 1000.0 * (2*3.14) /5);
-	// Rotate at 45 degrees per second.
-	float angle = SDL_GetTicks() / 1000.0 * 45;
+	// Create the MVP matrix
+	// Model: Going to world coordinates, pushing the cube back.
+	glm::mat4 model = glm::translate(glm::mat4(1.0f),
+						glm::vec3(0.0, 0.0, -4.0));
 
-	glm::vec3 axis_z(0, 0, 1);
-	glm::mat4 m_transform = glm::rotate(glm::mat4(1.0f),
-						glm::radians(angle),
-						axis_z) *
-				glm::translate(glm::mat4(1.0f),
-						glm::vec3(move, 0.0, 0.0));
+	// View: Positioning the camera. (A little up and facing straight)
+	glm::mat4 view = glm::lookAt(glm::vec3(0.0, 2.0, 0.0),
+					glm::vec3(0.0, 0.0, -4.0),
+					glm::vec3(0.0, 1.0, 0.0));
 
-	glUniformMatrix4fv(uniform_m_transform,
-				1,
-				GL_FALSE,
-				glm::value_ptr(m_transform));
+	// Projection: Project into the camera plane.
+	glm::mat4 projection = glm::perspective(45.0f,
+						1.0f*screen_width/screen_height,
+						0.1f,
+						10.0f);
 
-	// alpha 0->1->0 every 5 seconds.
-	float cur_fade = sinf(SDL_GetTicks() / 1000.0 * (2*3.14) / 5) / 2 + 0.5;
+	// Create the matrix for the animation this frame.
+	float angle = SDL_GetTicks() / 1000.0 * 45; // 45 degree per second.
+	glm::vec3 axis_y(0, 1, 0);
+	glm::mat4 anim = glm::rotate(glm::mat4(1.0f),
+					glm::radians(angle),
+					axis_y);
+
+	glm::mat4 mvp = projection * view * model * anim;
+
+	glUniformMatrix4fv(uniform_mvp, 1, GL_FALSE, glm::value_ptr(mvp));
 	glUseProgram(program);
-	glUniform1f(uniform_fade, cur_fade);
+}
+
+//
+// Change the size of the viewport.
+//
+void on_resize(int width, int height)
+{
+	screen_width = width;
+	screen_height = height;	
+	glViewport(0, 0, screen_width, screen_height);
 }
 
 //
@@ -215,6 +274,14 @@ void main_loop(SDL_Window *window)
 		while (SDL_PollEvent(&ev)) {
 			if (ev.type == SDL_QUIT)
 				return;
+
+			// Check if there was a size change of the window.
+			if (ev.type == SDL_WINDOWEVENT &&
+				ev.window.event ==
+					SDL_WINDOWEVENT_SIZE_CHANGED) {
+
+				on_resize(ev.window.data1, ev.window.data2);
+			}
 		}
 
 		input_logic();
@@ -236,8 +303,8 @@ int main()
 	SDL_Window *window = SDL_CreateWindow("My First Triangle",
 						SDL_WINDOWPOS_CENTERED,
 						SDL_WINDOWPOS_CENTERED,
-						640,
-						480,
+						screen_width,
+						screen_height,
 						SDL_WINDOW_RESIZABLE |
 						SDL_WINDOW_OPENGL);
 
@@ -277,6 +344,8 @@ int main()
 	// the program can initialize the resources.
 	if (!init_resources())
 		return EXIT_FAILURE;
+
+	glEnable(GL_DEPTH_TEST);
 
 	// If everything has gone okay, we can display something.
 	main_loop(window);
